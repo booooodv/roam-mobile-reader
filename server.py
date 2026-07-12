@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json, os, re, subprocess, threading
+from urllib.parse import urlparse
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
@@ -8,9 +9,12 @@ CONFIG=json.loads(CONFIG_PATH.read_text(encoding='utf-8')) if CONFIG_PATH.exists
 PORT=int(os.environ.get('PORT', CONFIG.get('port',8765)))
 HOST=os.environ.get('HOST', CONFIG.get('host','127.0.0.1'))
 GRAPH=os.environ.get('ROAM_GRAPH', CONFIG.get('graph',''))
+MCP_PACKAGE=os.environ.get('ROAM_MCP_PACKAGE','@roam-research/roam-mcp@0.8.1')
+MAX_BODY=256*1024
+SYNC_LOCK=threading.Lock()
 
 def rpc_session():
- p=subprocess.Popen(['npx','-y','@roam-research/roam-mcp'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1)
+ p=subprocess.Popen(['npx','-y',MCP_PACKAGE],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1)
  seq=0
  def rpc(method,params):
   nonlocal seq
@@ -88,9 +92,18 @@ class H(SimpleHTTPRequestHandler):
  def do_POST(self):
   if self.path!='/api/sync': self.send_error(404);return
   try:
-   n=int(self.headers.get('Content-Length','0')); payload=json.loads(self.rfile.read(n)); items=payload.get('highlights',[])
-   if len(items)>100: raise ValueError('单次最多100条')
-   out={'results':sync(items)}
+   origin=self.headers.get('Origin')
+   if origin:
+    u=urlparse(origin)
+    allowed={f'localhost:{PORT}',f'127.0.0.1:{PORT}',self.headers.get('Host','')}
+    if u.scheme not in ('http','https') or u.netloc not in allowed: raise PermissionError('Origin not allowed')
+   n=int(self.headers.get('Content-Length','0'))
+   if n<=0 or n>MAX_BODY: raise ValueError(f'Request body must be 1..{MAX_BODY} bytes')
+   payload=json.loads(self.rfile.read(n)); items=payload.get('highlights',[])
+   if not isinstance(items,list) or len(items)>100: raise ValueError('highlights must be a list with at most 100 items')
+   for item in items:
+    if not isinstance(item,dict) or not all(isinstance(item.get(k),str) for k in ('id','title','text')): raise ValueError('Invalid highlight schema')
+   with SYNC_LOCK: out={'results':sync(items)}
    print('SYNC_RESULT '+json.dumps(out,ensure_ascii=False),flush=True)
    raw=json.dumps(out,ensure_ascii=False).encode()
    self.send_response(200);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
