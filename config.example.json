@@ -1,0 +1,13 @@
+{
+  "site_title": "Roam Mobile Reader",
+  "site_subtitle": "A mobile-first, self-hosted reader for Roam Research",
+  "host": "127.0.0.1",
+  "port": 8765,
+  "graph": "your-graph-name",
+  "chapters": [
+    {
+      "name": "Example Chapter",
+      "path": "examples/notes/chapter-1"
+    }
+  ]
+}
